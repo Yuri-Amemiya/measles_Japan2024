@@ -1,0 +1,685 @@
+# incubation periodの確率密度関数
+f_inc <- function(u) {
+  dlnorm(u, meanlog = log(11.3^2 / sqrt(2.37 + 11.3^2)), sdlog = sqrt(log(1 + 2.37/11.3^2)))
+}
+
+# 観測されたserial interval
+serial_intervals <- c(12, 12, 14, 11, 16, 14, 17)
+
+#文献から引用したserial interval 
+serial_data <- read.csv("Simpson1952.csv")
+serial_intervals <- rep(serial_data$Interval, serial_data$Frequency)
+
+# 最大反復回数 max_iter まで繰り返す
+em_estim <- function(rho_init, serial_intervals, f_inc, max_iter=1000, eps=0.001) {
+  rho <- rho_init
+  for (iter in 1:max_iter) {
+    # E-step: 各観測値が各区間に属する確率を計算
+    
+    # serial intervalの観測数と区間の数に合わせて p 行列を初期化
+    p <- matrix(0, nrow=length(serial_intervals), ncol=7)
+    for (i in 1:length(serial_intervals)) {
+      si <- serial_intervals[i]
+      
+      # 発症までの時間 u を -1 から si まで0.001刻みで積分
+      for (u in seq(-1, si-0.001, 0.001)) {
+        
+        #u が各区間に属する場合、対応する p の要素に確率密度関数の値を加算
+        if (u >= -5 && u < -1) p[i,1] <- p[i,1] + f_inc(si-u)
+        if (u >= -1 && u < 0) p[i,2] <- p[i,2] + f_inc(si-u)
+        if (u >= 0 && u < 3) p[i,3] <- p[i,3] + f_inc(si-u)  
+        if (u >= 3 && u < 6) p[i,4] <- p[i,4] + f_inc(si-u)
+        if (u >= 6 && u < 9) p[i,5] <- p[i,5] + f_inc(si-u)  
+        if (u >= 9 && u < 12) p[i,6] <- p[i,6] + f_inc(si-u) 
+        if (u >= 12 && u < 15) p[i,7] <- p[i,7] + f_inc(si-u)
+      }
+    }
+    
+    #p行列にrhoを掛ける
+    p <- p * rho
+    
+    #正規化
+    p <- p / rowSums(p)
+    
+    # M-step: p 行列の列和を計算し、各区間の長さを乗じた上で、全体の和で割ることで rho を更新  
+    rho_new <- colSums(p) / sum(colSums(p) * c(4,1,3,3,3,3,3))
+    
+    # 収束判定: rhoの前回のパラメーターと今回のパラメーターの差の絶対値が0.001になったらプロセス終了
+    if (max(abs(rho_new - rho), na.rm = TRUE) < 1e-04) break
+    rho <- rho_new
+  }
+  return(rho)  
+}
+
+init <- c(0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1)
+res <- em_estim(init, serial_intervals, f_inc)
+
+rho1 <- res[1]; rho2 <- res[2]; rho3 <- res[3]; rho4 <- res[4]; rho5 <- res[5]; rho6 <- res[6]; rho7 <- res[7]
+rho1
+rho2
+rho3
+rho4
+rho5
+rho6
+rho7
+
+#-1日から6日目までのinfectiousnessのAUCを算出
+rho2*1 + rho3*3 + rho4*3
+
+# サンプリングとパラメータ推定を並列化
+library(foreach)
+library(doParallel)
+# ブートストラップ法による95%信頼区間の推定（高速化）
+
+n_bootstrap <- 1000
+n_params <- 7
+
+rho_bootstrap <- matrix(0, nrow=n_bootstrap, ncol=n_params)
+
+# 利用可能なコア数を取得
+n_cores <- detectCores()
+
+# クラスターを作成
+cl <- makeCluster(n_cores)
+
+# クラスターを登録
+registerDoParallel(cl)
+
+# 並列処理でブートストラップを実行
+rho_bootstrap <- foreach(b = 1:n_bootstrap, .combine = rbind) %dopar% {
+  serial_intervals_b <- sample(serial_intervals, replace=TRUE)
+  em_estim(init, serial_intervals_b, f_inc)
+}
+
+# クラスターを停止
+stopCluster(cl)
+
+rho_lower <- apply(rho_bootstrap, 2, quantile, 0.025)
+rho_upper <- apply(rho_bootstrap, 2, quantile, 0.975)
+rho1_ci <- c(rho_lower[1], rho_upper[1])
+rho2_ci <- c(rho_lower[2], rho_upper[2])
+rho3_ci <- c(rho_lower[3], rho_upper[3])
+rho4_ci <- c(rho_lower[4], rho_upper[4])
+rho5_ci <- c(rho_lower[5], rho_upper[5])
+rho6_ci <- c(rho_lower[6], rho_upper[6])
+rho7_ci <- c(rho_lower[7], rho_upper[7])
+
+rho1_ci
+rho2_ci
+rho3_ci
+rho4_ci
+rho5_ci
+rho6_ci
+rho7_ci
+
+rho_esti <- c(rho1, rho2, rho3, rho4, rho5, rho6, rho7,0,0)
+rho_ci_lower <- c(rho_lower[1],rho_lower[2], rho_lower[3], rho_lower[4], rho_lower[5], rho_lower[6],rho_lower[7],0,0) 
+rho_ci_upper <- c(rho_upper[1],rho_upper[2],rho_upper[3],rho_upper[4],rho_upper[5],rho_upper[6],rho_upper[7],0,0)
+
+rho_Simpson2003 <- data.frame(rho_esti,rho_ci_lower, rho_ci_upper)
+saveRDS(rho_Simpson2003, file = "rho_Simpson2003.obj")
+
+rho_Simpson2003 <- readRDS("rho_Simpson2003.obj")
+rho_esti <- rho_Simpson2003$rho_esti
+rho_ci_lower <- rho_Simpson2003$rho_ci_lower
+rho_ci_upper <- rho_Simpson2003$rho_ci_upper
+
+library(ggplot2)
+days <- c(-5, -1, 0, 3, 6, 9, 12, 15, 16)
+d = data.frame(x=days,y=rho_esti)
+d_low = data.frame(x=days, y=rho_ci_lower) 
+d_upp = data.frame(x=days, y=rho_ci_upper) 
+
+ggplot()+
+  geom_step(data=d, mapping = aes(x=x,y=y), lwd = 2 ) +
+  geom_step(data=d_low, mapping = aes(x=x,y=y), linetype = 3, lwd = 1) +
+  geom_step(data=d_upp, mapping = aes(x=x,y=y), lwd = 1) +
+  scale_x_continuous(breaks = c(-5,-4,-3,-2,-1,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16)) +
+  scale_y_continuous(limits = c(0, 0.3)) +
+  theme_classic() +
+  xlab("Disease age (days)")+
+  ylab("Frequency of secondary transimission")+
+  theme(text = element_text(size = 18),axis.ticks=element_line(colour = "black"),
+        axis.text=element_text(colour = "black"))
+
+################################################################################
+library(surveillance)
+
+# Indexケースの発症日設定
+index_case_onset <- as.Date("2024-01-01")
+
+# 2次感染者の発症日のベクトル作成
+secondary_cases_onset <- as.Date(c("2024-02-20","2024-03-03", "2024-03-03", "2024-03-05", "2024-03-02", "2024-03-07", "2024-03-05", "2024-03-07"))
+
+# Serial interval計算
+symptomTimes <- as.numeric(secondary_cases_onset - index_case_onset)
+
+
+#Generate an artificial outbreak of size n starting at time t0 and being of length
+n <- 9 ; t0 <- 50 ; l <- 50
+
+# 潜伏期間の確率質量関数（PMF）を計算
+dmax <- 30
+inc.pmf <- dlnorm(0:dmax, meanlog = log(11.3^2 / sqrt(11.3^2 + 2.37)), sdlog = sqrt(log(1 + 2.37/11.3^2)))
+
+#Function to sample from the incubation time
+rincu <- function(n) {
+  sample(0:dmax, size=n, replace=TRUE, prob=inc.pmf)
+}
+#Sample time of exposure and length of incubation time
+set.seed(123)
+exposureTimes <- t0 + sample(x=0:(l-1),size=n,replace=TRUE)
+symptomTimes <- symptomTimes
+
+#Time series of exposure (truth) and symptom onset (observed)
+X <- table( factor(exposureTimes,levels=1:(max(symptomTimes)+dmax)))
+Y <- table( factor(symptomTimes,levels=1:(max(symptomTimes)+dmax)))
+#Convert Y to an sts object
+Ysts <- sts(Y)
+
+#Plot the outbreak
+plot(Ysts, xaxis.labelFormat=NULL, legend=NULL)
+#Add true number of exposures to the plot
+lines(1:length(Y)+0.2,X,col="red",type="h",lty=2)
+
+
+#Helper function to show the EM step
+plotIt <- function(cur.sts) {
+  plot(cur.sts,xaxis.labelFormat=NULL, legend.opts=NULL,ylim=c(0,20))
+}
+
+#Call non-parametric back-projection function with hook function but
+#without bootstrapped confidence intervals
+bpnp.control <- list(k=0,eps=rep(0.005,2),iter.max=rep(250,2),B=-1,hookFun=plotIt,verbose=TRUE)
+
+#Fast C version (use argument: eq3a.method="C")! 
+sts.bp <- backprojNP(Ysts, incu.pmf=inc.pmf,
+                     control=modifyList(bpnp.control,list(eq3a.method="C")), ylim=c(0,max(X,Y)))
+
+#Show result
+plot(sts.bp,xaxis.labelFormat=NULL,legend=NULL,lwd=c(1,1,2),lty=c(1,1,1),main="")
+lines(1:length(Y)+0.2,X,col="red",type="h",lty=2)
+
+
+#Do the convolution for the expectation
+mu <- matrix(0,ncol=ncol(sts.bp),nrow=nrow(sts.bp))
+#Loop over all series
+for (j in 1:ncol(sts.bp)) { 
+  #Loop over all time points
+  for (t in 1:nrow(sts.bp)) {
+    #Convolution, note support of inc.pmf starts at zero (move idx by 1)
+    i <- seq_len(t)
+    mu[t,j] <- sum(inc.pmf[t-i+1] * upperbound(sts.bp)[i,j],na.rm=TRUE)
+  }
+}
+#Show the fit
+lines(1:nrow(sts.bp)-0.5,mu[,1],col="green",type="s",lwd=3)
+
+#Non-parametric back-projection including boostrap CIs
+bpnp.control2 <- modifyList(bpnp.control, list(hookFun=NULL, k=2,
+                                               B=1000, # in practice, use B >= 1000 !
+                                               eq3a.method="C"))
+sts.bp2 <- backprojNP(Ysts, incu.pmf=inc.pmf, control=bpnp.control2)
+
+######################################################################
+# Plot the result. This is currently a manual routine.
+# ToDo: Need to specify a plot method for stsBP objects which also
+#       shows the CI.
+#
+# Parameters:
+#  stsBP - object of class stsBP which is to be plotted.
+######################################################################
+
+plot.stsBP <- function(stsBP) {
+  maxy <- max(observed(stsBP),upperbound(stsBP),stsBP@ci,na.rm=TRUE)
+  plot(upperbound(stsBP),type="n",ylim=c(0,maxy), ylab="Cases",xlab="time")
+  if (!all(is.na(stsBP@ci))) {
+    polygon( c(1:nrow(stsBP),rev(1:nrow(stsBP))),
+             c(stsBP@ci[2,,1],rev(stsBP@ci[1,,1])),col="lightgray")
+  }
+  lines(upperbound(stsBP),type="l",lwd=2)
+  legend(x="topright",c(expression(lambda[t])),lty=c(1),col=c(1),fill=c(NA),border=c(NA),lwd=c(2))
+  
+  invisible()
+}
+
+#Plot the result of k=0 and add truth for comparison. No CIs available
+plot.stsBP(sts.bp)
+lines(1:length(Y),X,col=2,type="h")
+#Same for k=2
+plot.stsBP(sts.bp2)
+lines(1:length(Y),X,col=2,type="h")
+
+# 逆計算した感染日とその人数を取得
+exposure_counts <- round(sts.bp2@upperbound, digits = 0)
+
+# 日付の生成
+dates <- seq(as.Date("2024-01-01"), by = "day", length.out = 96)
+
+#感染時刻別の感染者数をベクトルに変換
+exposure_counts_vector <- as.vector(exposure_counts)
+
+# データフレームの作成
+exposure_df <- data.frame(Date = dates, Count = exposure_counts_vector)
+
+# 感染者数が0の行を削除
+exposure_df <- exposure_df[exposure_df$Count > 0, ]
+
+# 結果を表示
+print(exposure_df)
+
+infection <- as.vector(sts.bp2@upperbound)
+infection_CI_lower <- as.vector(sts.bp2@ci[1,,1])
+infection_CI_upper <- as.vector(sts.bp2@ci[2,,1])
+
+# データフレームの作成
+result_df <- data.frame(
+  time = seq(as.Date("2024-01-01"), by = "day", length.out = 96),
+  infection = infection,
+  CI_lower = infection_CI_lower,
+  CI_upper = infection_CI_upper
+)
+
+# CSVファイルへの出力
+write.csv(result_df, file = "infection_result.csv", row.names = FALSE)
+
+###B(t)の図示###
+library(ggplot2)
+library(dplyr)
+
+bt <- data.frame(time=seq(as.Date("2024-01-01"), by = "day", length.out = 96),
+                 bt_esti = sts.bp2@upperbound,
+                 bt_lower = sts.bp2@ci[1,,1],
+                 bt_upper = sts.bp2@ci[2,,1])
+
+# 2024-02-16から2024-03-10の行を抽出
+bt_filtered <- bt %>%
+  filter(time >= as.Date("2024-02-01") & time <= as.Date("2024-03-10"))
+
+
+ggplot(bt_filtered, aes(x = time)) +
+  geom_line(aes(y = bt_esti), color = "black", linewidth = 1) +
+  geom_line(aes(y = bt_lower), color = "black", linewidth = 0.5) +
+  geom_line(aes(y = bt_upper), color = "black", linewidth = 0.5) +
+  geom_ribbon(aes(ymin = pmin(bt_lower, 3), ymax = pmin(bt_upper, 3)), fill = "gray80", alpha = 0.5) +
+  labs(x = "Date of infection", y = "Secondary transmission") +
+  scale_y_continuous(limits = c(0, 3)) +
+  scale_x_date(date_labels = "%b-%d", date_breaks = "5 day") +
+  coord_cartesian(ylim = c(0, 3), clip = "off") +
+  theme_classic() +
+  theme(text = element_text(size = 18),axis.ticks=element_line(colour = "black"),
+        axis.text=element_text(colour = "black"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.margin = unit(c(1, 1, 1, 1), "lines"))
+
+################################################################################
+#Rt算出
+
+onset_dates <- c("2024-02-20", "2024-03-03", "2024-03-03", "2024-03-05", "2024-03-02", "2024-03-07", "2024-03-05", "2024-03-07")
+
+# 日付の範囲を作成
+date_range <- seq(as.Date("2024-01-01"), by = "day", length.out = 96)
+
+# 結果を格納するデータフレームを初期化
+result_Rt <- data.frame(date = date_range)
+
+###A(t)###
+days_since_onset <- as.numeric(date_range - as.Date(onset_dates))
+
+rho_At <- matrix(c(rho1, rho2, rho3, rho4, rho5, rho6, rho7), nrow = 1)
+total_infectiousness_At <- rep(0, length(date_range))
+
+# 各発症者について計算
+for (onset_date in onset_dates) {
+  # 発症日から経過した日数を計算
+  days_since_onset <- as.numeric(date_range - as.Date(onset_date))
+  
+  # 発症経過日数ごとのinfectiousnessを計算
+  infectiousness_At <- ifelse(days_since_onset >= -5 & days_since_onset < -1, rho1,
+                              ifelse(days_since_onset >= -1 & days_since_onset < 0, rho2,
+                                     ifelse(days_since_onset >= 0 & days_since_onset < 3, rho3,
+                                            ifelse(days_since_onset >= 3 & days_since_onset < 6, rho4,
+                                                   ifelse(days_since_onset >= 6 & days_since_onset < 9, rho5,
+                                                          ifelse(days_since_onset >= 9 & days_since_onset < 12, rho6, 
+                                                                 ifelse(days_since_onset >= 12 & days_since_onset < 15, rho7, 0)))))))
+  # 日にちごとにinfectiousnessを足し合わせる
+  total_infectiousness_At <- total_infectiousness_At + infectiousness_At
+}
+
+
+###B(t)###
+sts.bp2@upperbound
+
+Rt <- data.frame(date = date_range, R_t = sts.bp2@upperbound / total_infectiousness_At)
+
+################################################################################
+
+#Rtの信頼区間算出
+#A(t)の1000パターン
+# 発症日のデータ
+onset_dates <- c("2024-02-20", "2024-03-03", "2024-03-03", "2024-03-05", "2024-03-02", "2024-03-07", "2024-03-05", "2024-03-07")
+
+# 日付の範囲を作成
+date_range <- seq(as.Date("2024-01-01"), by = "day", length.out = 96)
+
+# 結果を格納するデータフレームを初期化
+result <- data.frame(date = date_range)
+
+# 1000個のrhoについて計算
+for (i in 1:1000) {
+  # infectiousnessを格納するベクトルを初期化
+  total_infectiousness <- rep(0, length(date_range))
+  
+  # 各発症者について計算
+  for (onset_date in onset_dates) {
+    # 発症日から経過した日数を計算
+    days_since_onset <- as.numeric(date_range - as.Date(onset_date))
+    
+    # 発症経過日数ごとのinfectiousnessを計算
+    infectiousness <- ifelse(days_since_onset >= -5 & days_since_onset < -1, rho_bootstrap[i,1],
+                             ifelse(days_since_onset >= -1 & days_since_onset < 0, rho_bootstrap[i,2],
+                                    ifelse(days_since_onset >= 0 & days_since_onset < 3, rho_bootstrap[i,3],
+                                           ifelse(days_since_onset >= 3 & days_since_onset < 6, rho_bootstrap[i,4],
+                                                  ifelse(days_since_onset >= 6 & days_since_onset < 9, rho_bootstrap[i,5],
+                                                         ifelse(days_since_onset >= 9 & days_since_onset < 12, rho_bootstrap[i,6],
+                                                                ifelse(days_since_onset >= 12 & days_since_onset < 15, rho_bootstrap[i,7], 0)))))))
+    
+    # 日にちごとにinfectiousnessを足し合わせる
+    total_infectiousness <- total_infectiousness + infectiousness
+  }
+  
+  # 結果をデータフレームに追加
+  result[[paste0("rho_", i)]] <- total_infectiousness
+}
+
+
+# 結果を格納するデータフレームを初期化
+output <- data.frame(date = result$date, 
+                     lower_25 = numeric(length(result$date)),
+                     upper_975 = numeric(length(result$date)))
+
+# 日付ごとに並び変えと抽出を実行
+for (i in 1:length(result$date)) {
+  # result$rho_1からresult$rho_1000までの値を取得
+  rho_values <- as.numeric(result[i, paste0("rho_", 1:1000)])
+  
+  # 小さい順に並び変え
+  sorted_rho <- sort(rho_values)
+  
+  # 下から25番目と975番目の値を抽出
+  output$lower_25[i] <- sorted_rho[25]
+  output$upper_975[i] <- sorted_rho[975]
+}
+
+library(dplyr)
+
+# 2024-02-16から2024-03-10の行を抽出
+At <- data.frame(x = result$date, 
+                 At_esti = total_infectiousness_At,
+                 At_lower = output$lower_25,
+                 At_upper = output$upper_975)
+
+At_filtered <- At %>%
+  filter(x >= as.Date("2024-02-01") & x <= as.Date("2024-03-25"))
+
+###A(t)図示
+ggplot(At_filtered, aes(x = x)) +
+  geom_line(aes(y = At_esti), color = "black", size = 1) +
+  geom_line(aes(y = At_lower), color = "black", size = 0.5) +
+  geom_line(aes(y = At_upper), color = "black", size = 0.5) +
+  geom_ribbon(aes(ymin = pmin(At_lower, 3), ymax = pmin(At_upper, 3)), fill = "gray80", alpha = 0.5) +
+  labs(x = "Calendar time", y = "Infectiousness") +
+  scale_y_continuous(limits = c(0, 2)) +
+  scale_x_date(date_labels = "%b-%d", date_breaks = "5 day") +
+  coord_cartesian(ylim = c(0, 2), clip = "off") +
+  theme_classic() +
+  theme(text = element_text(size = 18),axis.ticks=element_line(colour = "black"),
+        axis.text=element_text(colour = "black"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.margin = unit(c(1, 1, 1, 1), "lines"))
+
+
+#B(t)の1000回のリサンプリング
+#sts.bp2@lambda[,,1]
+
+#Rtの信頼区間算出
+#B(t)/A(t)を1000回実行
+result_divided <- data.frame(date = result$date)
+
+# 1000個のrhoについて計算
+for (i in 1:1000) {
+  # rho_i / sts.bp2@lambda[,,i] を計算
+  result_divided[[paste0("rho_", i)]] <- sts.bp2@lambda[,,i] / result[[paste0("rho_", i)]]
+}
+
+# 結果を出力
+result_divided
+
+# 結果を格納するデータフレームを初期化
+result_percentiles <- data.frame(
+  Calendar = seq(as.Date("2024-01-01"), by = "day", length.out = 96),
+  lower_25th = numeric(96),
+  upper_975th = numeric(96)
+)
+
+# インデックス1から96までループ
+for (i in 1:96) {
+  # rho_1[i]からrho_1000[i]までの値を抽出
+  values <- sapply(1:1000, function(j) result_divided[[paste0("rho_", j)]][i])
+  
+  # 抽出した値を降順に並び替え
+  sorted_values <- sort(values, decreasing = TRUE)
+  
+  # 下から25番目と975番目の値を抽出
+  result_percentiles$lower_25th[i] <- sorted_values[975]
+  result_percentiles$upper_975th[i] <- sorted_values[25]
+}
+
+# 結果を出力
+result_percentiles
+
+##Rtグラフ作図
+library(ggplot2)
+
+Rt_ci <- data.frame(time=seq(as.Date("2024-01-01"), by = "day", length.out = 96), 
+                    RT=Rt$R_t, 
+                    lower=result_percentiles$lower_25th, 
+                    upper=result_percentiles$upper_975th)
+
+library(dplyr)
+
+# 2024-02-16から2024-03-10の行を抽出
+Rt_ci_filtered <- Rt_ci %>%
+  filter(time >= as.Date("2024-02-16") & time <= as.Date("2024-03-10"))
+
+# Infの値を0に変換
+Rt_ci_filtered$RT[is.infinite(Rt_ci_filtered$RT)] <- 0
+Rt_ci_filtered$lower[is.infinite(Rt_ci_filtered$lower)] <- 0
+Rt_ci_filtered$upper[is.infinite(Rt_ci_filtered$upper)] <- 0
+
+# フィルタリングと変換後のデータを表示
+Rt_ci_filtered
+
+# グラフの作成
+library(ggplot2)
+
+rt_fig2 <- ggplot(Rt_ci_filtered, aes(x = time)) +
+  geom_line(aes(y = RT), color = "black", size = 1.1) +
+  geom_ribbon(aes(ymin = pmin(lower, 30), ymax = pmin(upper, 30)), fill = "gray80", alpha = 0.5) +
+  labs(x = "Calendar time", y = "Effective reproduction number") +
+  scale_y_continuous(limits = c(0, 30)) +
+  scale_x_date(date_labels = "%b-%d", date_breaks = "1 day") +
+  coord_cartesian(ylim = c(0, 30), clip = "off") +
+  theme_classic() +
+  theme(text = element_text(size = 18),axis.ticks=element_line(colour = "black"),
+        axis.text=element_text(colour = "black")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.margin = unit(c(1, 1, 1, 1), "lines"))
+
+rt_fig2
+
+# illness onsetのグラフ
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+onset_dates <- c("2024-02-20", "2024-03-03", "2024-03-03", "2024-03-05", "2024-03-02", "2024-03-08", "2024-03-07", "2024-03-05", "2024-03-07")
+
+# 日付の範囲
+date_range <- seq(as.Date("2024-02-17"), as.Date("2024-03-11"), by = "day")
+
+# カウントデータ
+count_data <- data.frame(date = as.Date(onset_dates)) %>%
+  group_by(date) %>%
+  summarise(count = n()) %>%
+  right_join(data.frame(date = date_range), by = "date") %>%
+  replace_na(list(count = 0))
+
+ggplot(count_data, aes(x = date, y = count)) +
+  geom_col() +
+  scale_x_date(date_labels = "%b-%d", date_breaks = "1 day") +
+  scale_y_continuous(limits = c(0, 5), expand = c(0, 0)) +
+  labs(x = "Date of illness onset", y = "Daily counts of cases") +
+  theme_classic() +
+  theme(
+    text = element_text(size = 14),
+    axis.ticks = element_line(colour = "black"),
+    axis.text = element_text(colour = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 14),
+    plot.margin = unit(c(1, 1, 1, 1), "lines")
+  )
+
+
+###Rtを重ね合わせ
+Rt_ci_filtered2 <- readRDS("Rt_ci_filtered2.obj")
+Rt_ci_filtered$rt2 = Rt_ci_filtered2$RT
+Rt_ci_filtered$lower2 = Rt_ci_filtered2$lower
+Rt_ci_filtered$upper2 = Rt_ci_filtered2$upper
+
+rt2 <- rt2 %>%
+  filter(date >= as.Date("2024-02-16") & date <= as.Date("2024-03-10"))
+# Infの値を0に変換
+rt2$R_t[is.infinite(rt2$R_t)] <- 0
+Rt_ci_filtered$lower[is.infinite(Rt_ci_filtered$lower)] <- 0
+Rt_ci_filtered$upper[is.infinite(Rt_ci_filtered$upper)] <- 0
+
+
+
+fig3 <- ggplot(Rt_ci_filtered, aes(x = time)) +
+  geom_line(aes(y = RT), color = "black", size = 1.1) +
+  geom_line(aes(y = rt2), color = "black", size = 1.1,linetype="twodash") +
+  geom_ribbon(aes(ymin = pmin(lower, 30), ymax = pmin(upper, 30)), fill = "gray80", alpha = 0.5) +
+  #geom_ribbon(aes(ymin = pmin(lower2, 30), ymax = pmin(upper2, 30)), fill = "gray40", alpha = 0.5) +
+  labs(x = "Calendar time", y = "Effective reproduction number") +
+  scale_y_continuous(limits = c(0, 30)) +
+  scale_x_date(date_labels = "%b-%d", date_breaks = "5 day") +
+  coord_cartesian(ylim = c(0, 30), clip = "off") +
+  theme_classic() +
+  theme(text = element_text(size = 18),axis.ticks=element_line(colour = "black"),
+        axis.text=element_text(colour = "black")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.margin = unit(c(1, 1, 1, 1), "lines"))
+
+fig3
+
+  
+    ggsave("Figure3", plot = fig3, width = 9, height = 6, units = "cm")
+  
+
+###epi curve(age distribution)
+# データフレームの作成
+data <- data.frame(
+  ID = 1:8,
+  Age_group = c("20s", "20s", "20s", "20s", "50s", "20s", "20s", "30s"),
+  Sex = c("Male", "Male", "Female", "Female", "Female", "Female", "Male", "Male"),
+  Date_of_onset = c("2024-02-20", "2024-03-03", "2024-03-03", "2024-03-05", "2024-03-02", "2024-03-07", "2024-03-05", "2024-03-07")
+)
+
+# Date of onsetを日付形式に変換
+data$Date_of_onset <- as.Date(data$Date_of_onset)
+
+# データの集計
+data_summary <- data %>%
+  group_by(Date_of_onset, Age_group) %>%
+  summarise(Count = n())
+
+# 年齢群の順序を設定
+data_summary$Age_group <- factor(data_summary$Age_group, levels = c("20s", "30s", "50s"))
+
+# ggplotを使って棒グラフを作成
+ggplot(data_summary, aes(x = Date_of_onset, y = Count, fill = Age_group)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_x_date(date_labels = "%b-%d", date_breaks = "1 day") +
+  scale_y_continuous(limits = c(0, 5), expand = c(0, 0)) +
+  scale_fill_grey(start = 0.75, end = 0.1, name = "Age Group") +
+  labs(x = "Date of illness onset", y = "Number of confirmaed cases") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = c(0.05, 0.95),
+        legend.justification = c(0, 1),
+        legend.background = element_blank(),
+        legend.text = element_text(size = 20))+
+  theme(text = element_text(size = 18),axis.ticks=element_line(colour = "black"),
+        axis.text=element_text(colour = "black")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.margin = unit(c(1, 1, 1, 1), "lines"))  
+
+
+
+
+##########################################################################################
+
+# 日付の範囲を作成
+dates <- seq(as.Date("2024-02-01"), as.Date("2024-03-25"), by = "day")
+
+# 1000回のbootstrap
+n_boots <- 1000
+rhoci <- data.frame(rho1 = rho_esti[1] + rnorm(n_boots, 0, sd = (rho_ci_upper[1] - rho_ci_lower[1])/3.92),
+                    rho2 = rho_esti[2] + rnorm(n_boots, 0, sd = (rho_ci_upper[2] - rho_ci_lower[2])/3.92),
+                    rho3 = rho_esti[3] + rnorm(n_boots, 0, sd = (rho_ci_upper[3] - rho_ci_lower[3])/3.92),
+                    rho4 = rho_esti[4] + rnorm(n_boots, 0, sd = (rho_ci_upper[4] - rho_ci_lower[4])/3.92),
+                    rho5 = rho_esti[5] + rnorm(n_boots, 0, sd = (rho_ci_upper[5] - rho_ci_lower[5])/3.92),
+                    rho6 = rho_esti[6] + rnorm(n_boots, 0, sd = (rho_ci_upper[6] - rho_ci_lower[6])/3.92),
+                    rho7 = rho_esti[7] + rnorm(n_boots, 0, sd = (rho_ci_upper[7] - rho_ci_lower[7])/3.92))
+
+# 各日付について infectiousness を計算
+infectiousness_boot <- sapply(1:n_boots, function(b) {
+  sapply(dates, function(date) {
+    days_since_onset <- as.numeric(date - as.Date(onset_dates))
+    infectiousness_At <- ifelse(days_since_onset >= -5 & days_since_onset < -1, rhoci$rho1[b],
+                                ifelse(days_since_onset >= -1 & days_since_onset < 0, rhoci$rho2[b],
+                                       ifelse(days_since_onset >= 0 & days_since_onset < 3, rhoci$rho3[b],
+                                              ifelse(days_since_onset >= 3 & days_since_onset < 6, rhoci$rho4[b],
+                                                     ifelse(days_since_onset >= 6 & days_since_onset < 9, rhoci$rho5[b],
+                                                            ifelse(days_since_onset >= 9 & days_since_onset < 12, rhoci$rho6[b],
+                                                                   ifelse(days_since_onset >= 12 & days_since_onset < 15, rhoci$rho7[b], 0)))))))
+    sum(infectiousness_At)
+  })
+})
+
+# 結果をデータフレームにまとめる
+result2 <- data.frame(date = dates, 
+                     infectiousness = apply(infectiousness_boot, 1, mean),
+                     lower_ci = apply(infectiousness_boot, 1, quantile, 0.025),
+                     upper_ci = apply(infectiousness_boot, 1, quantile, 0.975))
+
+print(result)
+
+result2 <- result2 %>%
+  mutate(lower_ci = ifelse(lower_ci < 0.001, 0, lower_ci))
+
+ggplot(result2, aes(x = date)) +
+  geom_line(aes(y = infectiousness), color = "black", size = 1) +
+  geom_line(aes(y = lower_ci), color = "black", size = 0.5) +
+  geom_line(aes(y = upper_ci), color = "black", size = 0.5) +
+  geom_ribbon(aes(ymin = pmin(lower_ci, 1), ymax = pmin(upper_ci, 3)), fill = "gray80", alpha = 0.5) +
+  labs(x = "Calendar time", y = "Infectiousness") +
+  scale_y_continuous(limits = c(0, 2)) +
+  scale_x_date(date_labels = "%b-%d", date_breaks = "5 day") +
+  coord_cartesian(ylim = c(0, 2), clip = "off") +
+  theme_classic() +
+  theme(text = element_text(size = 18),axis.ticks=element_line(colour = "black"),
+        axis.text=element_text(colour = "black"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.margin = unit(c(1, 1, 1, 1), "lines"))
