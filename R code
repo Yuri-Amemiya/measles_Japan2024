@@ -1,30 +1,25 @@
-# incubation periodの確率密度関数
+# incubation period
 f_inc <- function(u) {
   dlnorm(u, meanlog = log(11.3^2 / sqrt(2.37 + 11.3^2)), sdlog = sqrt(log(1 + 2.37/11.3^2)))
 }
 
-# 観測されたserial interval
+# observed serial interval
 serial_intervals <- c(12, 12, 14, 11, 16, 14, 17)
 
-#文献から引用したserial interval 
+# serial interval from United Kingdom
 serial_data <- read.csv("Simpson1952.csv")
 serial_intervals <- rep(serial_data$Interval, serial_data$Frequency)
 
-# 最大反復回数 max_iter まで繰り返す
 em_estim <- function(rho_init, serial_intervals, f_inc, max_iter=1000, eps=0.001) {
   rho <- rho_init
   for (iter in 1:max_iter) {
-    # E-step: 各観測値が各区間に属する確率を計算
-    
-    # serial intervalの観測数と区間の数に合わせて p 行列を初期化
+    # E-step
     p <- matrix(0, nrow=length(serial_intervals), ncol=7)
     for (i in 1:length(serial_intervals)) {
       si <- serial_intervals[i]
-      
-      # 発症までの時間 u を -1 から si まで0.001刻みで積分
+
       for (u in seq(-1, si-0.001, 0.001)) {
-        
-        #u が各区間に属する場合、対応する p の要素に確率密度関数の値を加算
+
         if (u >= -5 && u < -1) p[i,1] <- p[i,1] + f_inc(si-u)
         if (u >= -1 && u < 0) p[i,2] <- p[i,2] + f_inc(si-u)
         if (u >= 0 && u < 3) p[i,3] <- p[i,3] + f_inc(si-u)  
@@ -35,16 +30,13 @@ em_estim <- function(rho_init, serial_intervals, f_inc, max_iter=1000, eps=0.001
       }
     }
     
-    #p行列にrhoを掛ける
     p <- p * rho
     
-    #正規化
     p <- p / rowSums(p)
     
-    # M-step: p 行列の列和を計算し、各区間の長さを乗じた上で、全体の和で割ることで rho を更新  
+    # M-step
     rho_new <- colSums(p) / sum(colSums(p) * c(4,1,3,3,3,3,3))
     
-    # 収束判定: rhoの前回のパラメーターと今回のパラメーターの差の絶対値が0.001になったらプロセス終了
     if (max(abs(rho_new - rho), na.rm = TRUE) < 1e-04) break
     rho <- rho_new
   }
@@ -63,35 +55,25 @@ rho5
 rho6
 rho7
 
-#-1日から6日目までのinfectiousnessのAUCを算出
 rho2*1 + rho3*3 + rho4*3
 
-# サンプリングとパラメータ推定を並列化
 library(foreach)
 library(doParallel)
-# ブートストラップ法による95%信頼区間の推定（高速化）
 
 n_bootstrap <- 1000
 n_params <- 7
 
 rho_bootstrap <- matrix(0, nrow=n_bootstrap, ncol=n_params)
 
-# 利用可能なコア数を取得
 n_cores <- detectCores()
-
-# クラスターを作成
 cl <- makeCluster(n_cores)
-
-# クラスターを登録
 registerDoParallel(cl)
 
-# 並列処理でブートストラップを実行
 rho_bootstrap <- foreach(b = 1:n_bootstrap, .combine = rbind) %dopar% {
   serial_intervals_b <- sample(serial_intervals, replace=TRUE)
   em_estim(init, serial_intervals_b, f_inc)
 }
 
-# クラスターを停止
 stopCluster(cl)
 
 rho_lower <- apply(rho_bootstrap, 2, quantile, 0.025)
@@ -124,7 +106,6 @@ rho_esti <- rho_Simpson2003$rho_esti
 rho_ci_lower <- rho_Simpson2003$rho_ci_lower
 rho_ci_upper <- rho_Simpson2003$rho_ci_upper
 
-library(ggplot2)
 days <- c(-5, -1, 0, 3, 6, 9, 12, 15, 16)
 d = data.frame(x=days,y=rho_esti)
 d_low = data.frame(x=days, y=rho_ci_lower) 
@@ -145,20 +126,14 @@ ggplot()+
 ################################################################################
 library(surveillance)
 
-# Indexケースの発症日設定
-index_case_onset <- as.Date("2024-01-01")
-
-# 2次感染者の発症日のベクトル作成
-secondary_cases_onset <- as.Date(c("2024-02-20","2024-03-03", "2024-03-03", "2024-03-05", "2024-03-02", "2024-03-07", "2024-03-05", "2024-03-07"))
-
-# Serial interval計算
-symptomTimes <- as.numeric(secondary_cases_onset - index_case_onset)
-
+start_date <- as.Date("2024-01-01")
+onset <- as.Date(c("2024-02-20","2024-03-03", "2024-03-03", "2024-03-05", "2024-03-02", "2024-03-07", "2024-03-05", "2024-03-07"))
+symptomTimes <- as.numeric(onset - start_date)
 
 #Generate an artificial outbreak of size n starting at time t0 and being of length
 n <- 9 ; t0 <- 50 ; l <- 50
 
-# 潜伏期間の確率質量関数（PMF）を計算
+# Incubation period
 dmax <- 30
 inc.pmf <- dlnorm(0:dmax, meanlog = log(11.3^2 / sqrt(11.3^2 + 2.37)), sdlog = sqrt(log(1 + 2.37/11.3^2)))
 
@@ -174,7 +149,7 @@ symptomTimes <- symptomTimes
 #Time series of exposure (truth) and symptom onset (observed)
 X <- table( factor(exposureTimes,levels=1:(max(symptomTimes)+dmax)))
 Y <- table( factor(symptomTimes,levels=1:(max(symptomTimes)+dmax)))
-#Convert Y to an sts object
+
 Ysts <- sts(Y)
 
 #Plot the outbreak
@@ -221,14 +196,6 @@ bpnp.control2 <- modifyList(bpnp.control, list(hookFun=NULL, k=2,
                                                eq3a.method="C"))
 sts.bp2 <- backprojNP(Ysts, incu.pmf=inc.pmf, control=bpnp.control2)
 
-######################################################################
-# Plot the result. This is currently a manual routine.
-# ToDo: Need to specify a plot method for stsBP objects which also
-#       shows the CI.
-#
-# Parameters:
-#  stsBP - object of class stsBP which is to be plotted.
-######################################################################
 
 plot.stsBP <- function(stsBP) {
   maxy <- max(observed(stsBP),upperbound(stsBP),stsBP@ci,na.rm=TRUE)
@@ -250,29 +217,20 @@ lines(1:length(Y),X,col=2,type="h")
 plot.stsBP(sts.bp2)
 lines(1:length(Y),X,col=2,type="h")
 
-# 逆計算した感染日とその人数を取得
 exposure_counts <- round(sts.bp2@upperbound, digits = 0)
-
-# 日付の生成
 dates <- seq(as.Date("2024-01-01"), by = "day", length.out = 96)
-
-#感染時刻別の感染者数をベクトルに変換
 exposure_counts_vector <- as.vector(exposure_counts)
-
-# データフレームの作成
 exposure_df <- data.frame(Date = dates, Count = exposure_counts_vector)
 
-# 感染者数が0の行を削除
 exposure_df <- exposure_df[exposure_df$Count > 0, ]
 
-# 結果を表示
 print(exposure_df)
 
 infection <- as.vector(sts.bp2@upperbound)
 infection_CI_lower <- as.vector(sts.bp2@ci[1,,1])
 infection_CI_upper <- as.vector(sts.bp2@ci[2,,1])
 
-# データフレームの作成
+# dataframe
 result_df <- data.frame(
   time = seq(as.Date("2024-01-01"), by = "day", length.out = 96),
   infection = infection,
@@ -280,10 +238,7 @@ result_df <- data.frame(
   CI_upper = infection_CI_upper
 )
 
-# CSVファイルへの出力
-write.csv(result_df, file = "infection_result.csv", row.names = FALSE)
-
-###B(t)の図示###
+# plot B2
 library(ggplot2)
 library(dplyr)
 
