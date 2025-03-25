@@ -1,1 +1,151 @@
+library(surveillance)
 
+start_date <- as.Date("2024-01-01")
+onset <- as.Date(c("2024-02-20","2024-03-03", "2024-03-03", "2024-03-05", "2024-03-02", "2024-03-07", "2024-03-05", "2024-03-07"))
+symptomTimes <- as.numeric(onset - start_date)
+
+#Generate an artificial outbreak of size n starting at time t0 and being of length
+n <- 9 ; t0 <- 50 ; l <- 50
+
+# Incubation period
+dmax <- 30
+inc.pmf <- dlnorm(0:dmax, meanlog = log(11.3^2 / sqrt(11.3^2 + 2.37)), sdlog = sqrt(log(1 + 2.37/11.3^2)))
+
+#Function to sample from the incubation time
+rincu <- function(n) {
+  sample(0:dmax, size=n, replace=TRUE, prob=inc.pmf)
+}
+
+#Sample time of exposure and length of incubation time
+set.seed(123)
+exposureTimes <- t0 + sample(x=0:(l-1),size=n,replace=TRUE)
+symptomTimes <- symptomTimes
+
+#Time series of exposure (truth) and symptom onset (observed)
+X <- table( factor(exposureTimes,levels=1:(max(symptomTimes)+dmax)))
+Y <- table( factor(symptomTimes,levels=1:(max(symptomTimes)+dmax)))
+
+Ysts <- sts(Y)
+
+plotIt <- function(cur.sts) {
+  plot(cur.sts,xaxis.labelFormat=NULL, legend.opts=NULL,ylim=c(0,20))
+}
+
+bpnp.control <- list(k=0,eps=rep(0.005,2),iter.max=rep(250,2),B=-1,hookFun=plotIt,verbose=TRUE)
+
+sts.bp <- backprojNP(Ysts, incu.pmf=inc.pmf,
+                     control=modifyList(bpnp.control,list(eq3a.method="C")), ylim=c(0,max(X,Y)))
+
+#result
+plot(sts.bp,xaxis.labelFormat=NULL,legend=NULL,lwd=c(1,1,2),lty=c(1,1,1),main="")
+lines(1:length(Y)+0.2,X,col="red",type="h",lty=2)
+
+
+# Do the convolution for the expectation
+mu <- matrix(0,ncol=ncol(sts.bp),nrow=nrow(sts.bp))
+#Loop over all series
+for (j in 1:ncol(sts.bp)) { 
+  #Loop over all time points
+  for (t in 1:nrow(sts.bp)) {
+    #Convolution, note support of inc.pmf starts at zero (move idx by 1)
+    i <- seq_len(t)
+    mu[t,j] <- sum(inc.pmf[t-i+1] * upperbound(sts.bp)[i,j],na.rm=TRUE)
+  }
+}
+
+#Show the fit
+lines(1:nrow(sts.bp)-0.5,mu[,1],col="green",type="s",lwd=3)
+
+#Non-parametric back-projection including boostrap CIs
+bpnp.control2 <- modifyList(bpnp.control, list(hookFun=NULL, k=2,
+                                               B=1000, # in practice, use B >= 1000 !
+                                               eq3a.method="C"))
+sts.bp2 <- backprojNP(Ysts, incu.pmf=inc.pmf, control=bpnp.control2)
+
+
+plot.stsBP <- function(stsBP) {
+  maxy <- max(observed(stsBP),upperbound(stsBP),stsBP@ci,na.rm=TRUE)
+  plot(upperbound(stsBP),type="n",ylim=c(0,maxy), ylab="Cases",xlab="time")
+  if (!all(is.na(stsBP@ci))) {
+    polygon( c(1:nrow(stsBP),rev(1:nrow(stsBP))),
+             c(stsBP@ci[2,,1],rev(stsBP@ci[1,,1])),col="lightgray")
+  }
+  lines(upperbound(stsBP),type="l",lwd=2)
+  legend(x="topright",c(expression(lambda[t])),lty=c(1),col=c(1),fill=c(NA),border=c(NA),lwd=c(2))
+  
+  invisible()
+}
+
+
+# calculation of Rt
+
+onset_dates <- c("2024-02-20", "2024-03-03", "2024-03-03", "2024-03-05", "2024-03-02", "2024-03-07", "2024-03-05", "2024-03-07")
+date_range <- seq(as.Date("2024-01-01"), by = "day", length.out = 96)
+result_Rt <- data.frame(date = date_range)
+
+###A(t)###
+days_since_onset <- as.numeric(date_range - as.Date(onset_dates))
+
+rho_At <- matrix(c(rho1, rho2, rho3, rho4, rho5, rho6, rho7), nrow = 1)
+total_infectiousness_At <- rep(0, length(date_range))
+
+for (onset_date in onset_dates) {
+  days_since_onset <- as.numeric(date_range - as.Date(onset_date))
+  
+  infectiousness_At <- ifelse(days_since_onset >= -5 & days_since_onset < -1, rho1,
+                              ifelse(days_since_onset >= -1 & days_since_onset < 0, rho2,
+                                     ifelse(days_since_onset >= 0 & days_since_onset < 3, rho3,
+                                            ifelse(days_since_onset >= 3 & days_since_onset < 6, rho4,
+                                                   ifelse(days_since_onset >= 6 & days_since_onset < 9, rho5,
+                                                          ifelse(days_since_onset >= 9 & days_since_onset < 12, rho6, 
+                                                                 ifelse(days_since_onset >= 12 & days_since_onset < 15, rho7, 0)))))))
+
+  total_infectiousness_At <- total_infectiousness_At + infectiousness_At
+}
+
+
+###B(t)###
+sts.bp2@upperbound
+
+Rt <- data.frame(date = date_range, R_t = sts.bp2@upperbound / total_infectiousness_At)
+
+################################################################################
+
+#calculate 95% confidence interval of Rt
+onset_dates <- c("2024-02-20", "2024-03-03", "2024-03-03", "2024-03-05", "2024-03-02", "2024-03-07", "2024-03-05", "2024-03-07")
+
+date_range <- seq(as.Date("2024-01-01"), by = "day", length.out = 96)
+
+result <- data.frame(date = date_range)
+
+for (i in 1:1000) {
+  total_infectiousness <- rep(0, length(date_range))
+  
+  for (onset_date in onset_dates) {
+    days_since_onset <- as.numeric(date_range - as.Date(onset_date))
+    
+    infectiousness <- ifelse(days_since_onset >= -5 & days_since_onset < -1, rho_bootstrap[i,1],
+                             ifelse(days_since_onset >= -1 & days_since_onset < 0, rho_bootstrap[i,2],
+                                    ifelse(days_since_onset >= 0 & days_since_onset < 3, rho_bootstrap[i,3],
+                                           ifelse(days_since_onset >= 3 & days_since_onset < 6, rho_bootstrap[i,4],
+                                                  ifelse(days_since_onset >= 6 & days_since_onset < 9, rho_bootstrap[i,5],
+                                                         ifelse(days_since_onset >= 9 & days_since_onset < 12, rho_bootstrap[i,6],
+                                                                ifelse(days_since_onset >= 12 & days_since_onset < 15, rho_bootstrap[i,7], 0)))))))
+
+    total_infectiousness <- total_infectiousness + infectiousness
+  }
+
+  result[[paste0("rho_", i)]] <- total_infectiousness
+}
+
+output <- data.frame(date = result$date, 
+                     lower_25 = numeric(length(result$date)),
+                     upper_975 = numeric(length(result$date)))
+
+for (i in 1:length(result$date)) {
+  rho_values <- as.numeric(result[i, paste0("rho_", 1:1000)])
+  sorted_rho <- sort(rho_values)
+  
+  output$lower_25[i] <- sorted_rho[25]
+  output$upper_975[i] <- sorted_rho[975]
+}
