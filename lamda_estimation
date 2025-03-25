@@ -1,1 +1,62 @@
+# incubation period
+f_inc <- function(u) {
+  dlnorm(u, meanlog = log(11.3^2 / sqrt(2.37 + 11.3^2)), sdlog = sqrt(log(1 + 2.37/11.3^2)))
+}
 
+# observed serial interval
+serial_intervals <- c(12, 12, 14, 11, 16, 14, 16)
+
+# estimate lamda for each time interval
+em_estim <- function(rho_init, serial_intervals, f_inc, max_iter=1000, eps=0.001) {
+  rho <- rho_init
+  for (iter in 1:max_iter) {
+
+    # E-step
+    p <- matrix(0, nrow=length(serial_intervals), ncol=7)
+    for (i in 1:length(serial_intervals)) {
+      si <- serial_intervals[i]
+
+      for (u in seq(-1, si-0.001, 0.001)) {
+
+        if (u >= -5 && u < -1) p[i,1] <- p[i,1] + f_inc(si-u)
+        if (u >= -1 && u < 0) p[i,2] <- p[i,2] + f_inc(si-u)
+        if (u >= 0 && u < 3) p[i,3] <- p[i,3] + f_inc(si-u)  
+        if (u >= 3 && u < 6) p[i,4] <- p[i,4] + f_inc(si-u)
+        if (u >= 6 && u < 9) p[i,5] <- p[i,5] + f_inc(si-u)  
+        if (u >= 9 && u < 12) p[i,6] <- p[i,6] + f_inc(si-u) 
+        if (u >= 12 && u < 15) p[i,7] <- p[i,7] + f_inc(si-u)
+      }
+    }
+    
+    p <- p * rho
+    
+    p <- p / rowSums(p)
+    
+    # M-step
+    rho_new <- colSums(p) / sum(colSums(p) * c(4,1,3,3,3,3,3))
+    
+    if (max(abs(rho_new - rho), na.rm = TRUE) < 1e-04) break
+    rho <- rho_new
+  }
+  return(rho)  
+}
+
+# compute 95% confidence interval using bootstrap
+library(foreach)
+library(doParallel)
+
+n_bootstrap <- 1000
+n_params <- 7
+
+rho_bootstrap <- matrix(0, nrow=n_bootstrap, ncol=n_params)
+
+n_cores <- detectCores()
+cl <- makeCluster(n_cores)
+registerDoParallel(cl)
+
+rho_bootstrap <- foreach(b = 1:n_bootstrap, .combine = rbind) %dopar% {
+  serial_intervals_b <- sample(serial_intervals, replace=TRUE)
+  em_estim(init, serial_intervals_b, f_inc)
+}
+
+stopCluster(cl)
