@@ -4,7 +4,7 @@ f_inc <- function(u) {
 }
 
 # observed serial interval
-serial_intervals <- c(12, 12, 14, 11, 16, 14, 17)
+serial_intervals <- c(12, 12, 14, 11, 16, 14, 16)
 
 # serial interval from United Kingdom
 serial_data <- read.csv("Simpson1952.csv")
