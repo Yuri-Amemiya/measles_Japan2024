@@ -1,13 +1,12 @@
 library(surveillance)
+# Incubation period
+dmax <- 30
+inc.pmf <- dlnorm(0:dmax, meanlog = log(11.3^2 / sqrt(11.3^2 + 2.37)), sdlog = sqrt(log(1 + 2.37/11.3^2)))
 
 start_date <- as.Date("2024-01-01")
 onset <- as.Date(c("2024-02-20","2024-03-03", "2024-03-03", "2024-03-05", "2024-03-02", "2024-03-07", "2024-03-05", "2024-03-07"))
 
 n <- 9 ; t0 <- 50 ; l <- 50
-
-# Incubation period
-dmax <- 30
-inc.pmf <- dlnorm(0:dmax, meanlog = log(11.3^2 / sqrt(11.3^2 + 2.37)), sdlog = sqrt(log(1 + 2.37/11.3^2)))
 
 #Function to sample from the incubation time
 rincu <- function(n) {
