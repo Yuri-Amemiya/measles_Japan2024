@@ -17,7 +17,6 @@ rincu <- function(n) {
 #Sample time of exposure and length of incubation time
 set.seed(123)
 exposureTimes <- t0 + sample(x=0:(l-1),size=n,replace=TRUE)
-symptomTimes <- symptomTimes
 
 #Time series of exposure (truth) and symptom onset (observed)
 X <- table( factor(exposureTimes,levels=1:(max(symptomTimes)+dmax)))
@@ -73,7 +72,6 @@ plot.stsBP <- function(stsBP) {
   
   invisible()
 }
-
 
 # calculation of Rt
 
