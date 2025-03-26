@@ -3,7 +3,6 @@ library(surveillance)
 start_date <- as.Date("2024-01-01")
 onset <- as.Date(c("2024-02-20","2024-03-03", "2024-03-03", "2024-03-05", "2024-03-02", "2024-03-07", "2024-03-05", "2024-03-07"))
 
-#Generate an artificial outbreak of size n starting at time t0 and being of length
 n <- 9 ; t0 <- 50 ; l <- 50
 
 # Incubation period
